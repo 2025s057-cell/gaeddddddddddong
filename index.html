@@ -83,11 +83,11 @@ let rec=false,nick='',recMsg='',recMsgT=0,hintT=0;
 const nk=document.getElementById('nk');nk.addEventListener('input',()=>{nick=nk.value});
 function ui(){return Math.max(13,Math.min(mn()/26,H/30))}
 function recRect(){const u=ui(),w=Math.min(W*.8,320),hh=u*2.6;return{x:W/2-w/2,y:H*.13+u*15.4,w,h:hh}}
-async function recCheck(){try{const db=await claude.use('db');if(!db){rec=false;recMsg='여기서는 기록 모드를 쓸 수 없어요 (로그인한 공유 링크 필요)';recMsgT=performance.now()}}catch(e){rec=false;recMsg='기록 모드를 사용할 수 없어요';recMsgT=performance.now()}}
+async function recCheck(){if(typeof claude==='undefined')return;try{const db=await claude.use('db');if(!db){rec=false;recMsg='여기서는 기록 모드를 쓸 수 없어요 (로그인한 공유 링크 필요)';recMsgT=performance.now()}}catch(e){rec=false;recMsg='기록 모드를 사용할 수 없어요';recMsgT=performance.now()}}
 function startRect(){const u=ui(),w=Math.min(W*.8,320);return{x:W/2-w/2,y:H*.13+u*11.4,w,h:u*3}}
 function trophyRect(){const s=Math.max(38,ui()*2.6);return{x:W-s-10,y:10,w:s,h:s}}
 async function openBoard(){S={mode:'board',t:0,lbT:0,lbLast:performance.now(),lb:{st:'load',view:true,pos:-1,me:null,myName:'',myScore:0}};const L=S.lb;
- try{const db=await claude.use('db');if(!db){L.st='nodb';return}const snap=await db.collection('scores').orderBy('score','desc').limit(10).get();L.rows=snap.docs.map(d=>({id:d.id,...d.data()}));L.st='ok'}catch(e){L.st='err';L.err=e&&e.code}}
+ try{L.rows=await dbTop(10);L.st='ok'}catch(e){L.st=(e&&e.code==='nodb')?'nodb':'err';L.err=e&&e.code}}
 function titleScreen(){const u=ui();c.fillStyle='rgba(8,0,4,.78)';c.fillRect(0,0,W,H);
  T('IMMUNE WAR : CYTOTOXIC',W/2,H*.13,Math.min(u*1.8,W*.9/(22*.62)),'#ff3b6b');
  ['당신은 세포독성 T림프구','마우스 / 터치로 조준 · 클릭 / 탭 · 꾹 누르면 연사','조준하면 항원 인식 정보 표시','노란 핵(약점) 명중 = 정밀 타격 즉사','파란 정상 세포 공격 금지! (한 세포에 3번까지는 봐줌)','처치한 항원은 면역 기억 → 같은 항원에 추가 피해'].forEach((s,i)=>T(s,W/2,H*.13+u*2.8+i*u*1.55,u*.9,'#ffe9ef'));
@@ -102,12 +102,19 @@ function titleScreen(){const u=ui();c.fillStyle='rgba(8,0,4,.78)';c.fillRect(0,0
  const ny=iy+(rec?ih:0)+u*1.2;
  if(performance.now()-hintT<2500)T('닉네임을 입력해주세요!',W/2,ny,u*.9,'#ff5a5a');
  else if(performance.now()-recMsgT<4500)T(recMsg,W/2,ny,u*.75,'#ff9fb5')}
+const FB={p:'itachi-aebcd',k:'AIzaSyAXkMvGEFGmgsUQXPBZKIS3tQCB6qRUXSc'},FBU='https://firestore.googleapis.com/v1/projects/'+FB.p+'/databases/(default)/documents';
+const hasClaude=()=>typeof claude!=='undefined'&&claude&&claude.use;
+async function fbAdd(d){const r=await fetch(FBU+'/scores?key='+FB.k,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields:{name:{stringValue:d.name},score:{integerValue:String(Math.floor(d.score))},rank:{stringValue:d.rank},clear:{booleanValue:!!d.clear},stage:{integerValue:String(d.stage)},ts:{integerValue:String(d.ts)}}})});
+ if(!r.ok)throw{code:r.status===403?'invalid_argument':'http'+r.status};const j=await r.json();return j.name.split('/').pop()}
+async function fbTop(n){const r=await fetch(FBU+':runQuery?key='+FB.k,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({structuredQuery:{from:[{collectionId:'scores'}],orderBy:[{field:{fieldPath:'score'},direction:'DESCENDING'}],limit:n}})});
+ if(!r.ok)throw{code:r.status===403?'invalid_argument':'http'+r.status};const j=await r.json();
+ return j.filter(x=>x.document).map(x=>{const f=x.document.fields||{};return{id:x.document.name.split('/').pop(),name:f.name&&f.name.stringValue,score:f.score?+f.score.integerValue:0,rank:f.rank&&f.rank.stringValue}})}
+async function dbAdd(d){if(hasClaude()){const db=await claude.use('db');if(!db)throw{code:'nodb'};const ref=await db.collection('scores').add(d);return ref.id}return fbAdd(d)}
+async function dbTop(n){if(hasClaude()){const db=await claude.use('db');if(!db)throw{code:'nodb'};const snap=await db.collection('scores').orderBy('score','desc').limit(n).get();return snap.docs.map(d=>({id:d.id,...d.data()}))}return fbTop(n)}
 async function submitRecord(){const L=S.lb={st:'load',myName:(nick||'').trim().slice(0,12)||'NONAME',myScore:S.score};
- try{const db=await claude.use('db');if(!db){L.st='nodb';return}
-  const ref=await db.collection('scores').add({name:L.myName,score:S.score,rank:S.rank,clear:S.mode==='win',stage:S.stage+1,ts:Date.now()});
-  const snap=await db.collection('scores').orderBy('score','desc').limit(200).get();
-  const rows=snap.docs.map(d=>({id:d.id,...d.data()}));const idx=rows.findIndex(r=>r.id===ref.id);
-  L.rows=rows.slice(0,10);L.me=ref.id;L.pos=idx>=0?idx+1:0;L.st='ok'}catch(e){L.st='err';L.err=e&&e.code}}
+ try{const id=await dbAdd({name:L.myName,score:S.score,rank:S.rank,clear:S.mode==='win',stage:S.stage+1,ts:Date.now()});
+  const rows=await dbTop(200),idx=rows.findIndex(r=>r.id===id);
+  L.rows=rows.slice(0,10);L.me=id;L.pos=idx>=0?idx+1:0;L.st='ok'}catch(e){L.st=(e&&e.code==='nodb')?'nodb':'err';L.err=e&&e.code}}
 function lbScreen(){const now=performance.now(),dt=Math.min(.05,(now-(S.lbLast||now))/1000);S.lbLast=now;const u=ui(),L=S.lb;
  if(L.st==='ok'&&!S.celInit){S.celInit=1;S.cel=L.pos>=1&&L.pos<=3;S.lbT=0;if(S.cel){S.cf=[];S.fw=[];S.fwT=0;const n=L.pos===1?140:80;for(let i=0;i<n;i++)S.cf.push({x:R()*W,y:-R()*H,vy:90+R()*140,vx:(R()-.5)*60,ph:R()*6.28,rot:R()*6.28,vr:(R()-.5)*8,s:6+R()*7,c:['#ffd24a','#ff3b6b','#4dffb8','#2ec4ff','#d36bff','#ffffff'][i%6]});sfx('fanfare');shake(24);flashW=.5}else sfx('stamp')}
  S.lbT+=dt;const t=S.lbT;
@@ -125,7 +132,7 @@ function lbScreen(){const now=performance.now(),dt=Math.min(.05,(now-(S.lbLast||
   if((L.pos===0||L.pos>10)&&!L.view){const y=y0+10*rh+6,fs=Math.min(u*.95,rh*.5);c.fillStyle='rgba(255,210,74,.2)';c.fillRect(x0,y,cw,rh);c.strokeStyle='#ffd24a';c.lineWidth=2;c.strokeRect(x0,y,cw,rh);
    T(L.pos?'내 순위 #'+L.pos:'내 순위 200위 밖',x0+10,y+rh*.65,fs,'#ffe066','left');T(L.myName+'  '+L.myScore.toLocaleString(),x0+cw-10,y+rh*.65,fs,'#4dffb8','right')}}
  else if(L.st==='load')T('불러오는 중…',W/2,H*.4,u,'#ffe9ef');
- else T(L.st==='nodb'?'리더보드를 사용할 수 없어요':L.err==='invalid_argument'?'기록 권한이 없어요 (Contributor 이상만 기록 가능)':'기록에 실패했어요',W/2,H*.4,u*.9,'#ff9fb5');
+ else T(L.st==='nodb'?'리더보드를 사용할 수 없어요':L.err==='invalid_argument'?'기록 권한이 없어요 (공유 권한 또는 DB 규칙 확인)':'기록에 실패했어요',W/2,H*.4,u*.9,'#ff9fb5');
  if(S.cel){for(const q of S.cf){q.y+=q.vy*dt;q.x+=q.vx*dt+Math.sin(q.ph+t*3)*20*dt;q.rot+=q.vr*dt;if(q.y>H+20){q.y=-20;q.x=R()*W}c.save();c.translate(q.x,q.y);c.rotate(q.rot);c.fillStyle=q.c;c.fillRect(-q.s/2,-q.s/4,q.s,q.s/2);c.restore()}
   S.fwT-=dt;if(S.fwT<=0){S.fwT=pos===1?.4:.75;const cx=W*(.12+.76*R()),cy=H*(.1+.35*R()),hu=Math.floor(R()*360);for(let i=0;i<40;i++){const a=R()*6.283,v=100+R()*260;S.fw.push({x:cx,y:cy,vx:Math.cos(a)*v,vy:Math.sin(a)*v,l:.9+R()*.6,m:1.5,h:hu,s:2+R()*2})}sfx('pop');shake(6)}
   c.globalCompositeOperation='lighter';for(const q of S.fw){q.l-=dt;q.vy+=220*dt;q.vx*=1-dt*1.2;q.x+=q.vx*dt;q.y+=q.vy*dt;c.fillStyle='hsla('+q.h+',100%,60%,'+Math.max(0,q.l/q.m)+')';c.beginPath();c.arc(q.x,q.y,q.s,0,6.283);c.fill()}c.globalCompositeOperation='source-over';S.fw=S.fw.filter(q=>q.l>0)}
